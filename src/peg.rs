@@ -76,12 +76,28 @@ impl<'self> Eq for StringStream<'self> {
 mod parser {
 	use super::{StringStream};
 
-	pub trait Parser<T> {
-		fn run_string<'r>(&self, input: &'r str) -> ParseResult<'r, T> {
+	pub trait Parser<A> {
+		fn run_string<'r>(&self, input: &'r str) -> ParseResult<'r, A> {
 			self.run_string_stream(StringStream::new(input))
 		}
 
-		fn run_string_stream<'r>(&self, input: StringStream<'r>) -> ParseResult<'r, T>;
+		fn run_string_stream<'r>(&self, input: StringStream<'r>) -> ParseResult<'r, A>;
+
+		fn or<B, U: Parser<B>>(self, other: U) -> Or<Self, U> {
+			Or{ p1: self, p2: other }
+		}
+
+		fn and<B, U: Parser<B>>(self, p2: U) -> And<Self, U> {
+			And{ p1: self, p2: p2 }
+		}
+
+		fn map<B>(self, f: ~fn(v: A) -> B) -> Map<A, B, Self> {
+			Map{ p: self, f: f }
+		}
+
+		fn flatMap<B, U: Parser<B>>(self, f: ~fn(v: A) -> U) -> FlatMap<A, B, Self, U> {
+			FlatMap{ p: self, f: f }
+		}
 	}
 
 	// pub type ParseResult<'self, T> = Result<(T, StringStream<'self>), ~str>;
@@ -204,6 +220,10 @@ mod parser {
 		AnyOf{ valid: valid }
 	}
 
+	/////////////////
+	// COMBINATORS //
+	/////////////////
+
 	struct Or<T, U> {
 		priv p1: T,
 		priv p2: U,
@@ -220,10 +240,6 @@ mod parser {
 					}
 			}
 		}
-	}
-
-	pub fn or<A, B, T: Parser<A>, U: Parser<B>>(p1: T, p2: U) -> Or<T, U> {
-		Or{ p1: p1, p2: p2 }
 	}
 
 	struct And<T, U> {
@@ -244,13 +260,9 @@ mod parser {
 		}
 	}
 
-	pub fn and<A, B, T: Parser<A>, U: Parser<B>>(p1: T, p2: U) -> And<T, U> {
-		And{ p1: p1, p2: p2 }
-	}
-
 	struct Map<A, B, T> {
-		p: T,
-		f: ~fn(v: A) -> B,
+		priv p: T,
+		priv f: ~fn(v: A) -> B,
 	}
 
 	impl<A, B, T: Parser<A>> Parser<B> for Map<A, B, T> {
@@ -262,13 +274,9 @@ mod parser {
 		}
 	}
 
-	pub fn map<A, B, T: Parser<A>>(p: T, f: ~fn(v: A) -> B) -> Map<A, B, T> {
-		Map{ p: p, f: f }
-	}
-
 	struct FlatMap<A, B, T, U> {
-		p: T,
-		f: ~fn(v: A) -> U,
+		priv p: T,
+		priv f: ~fn(v: A) -> U,
 	}
 
 	impl<A, B, T: Parser<A>, U: Parser<B>> Parser<B> for FlatMap<A, B, T, U> {
@@ -279,16 +287,12 @@ mod parser {
 			}
 		}
 	}
-
-	pub fn flatMap<A, B, T: Parser<A>, U: Parser<B>>(p: T, f: ~fn(v: A) -> U) -> FlatMap<A, B, T, U> {
-		FlatMap{ p: p, f: f }
-	}
 }
 
 #[cfg(test)]
 mod test {
 	use super::StringStream;
-	use parser::{success, peek, chr, text, anyOf, or, map, flatMap, Parser};
+	use parser::{success, peek, chr, text, anyOf, Parser};
 
 
 	fn input() -> StringStream {
@@ -396,16 +400,16 @@ mod test {
 
 	#[test]
 	fn test_or(){
-		let (res, rest) = or(chr('a'), chr('b')).run_string("abc").unwrap();
+		let (res, rest) = chr('a').or(chr('b')).run_string("abc").unwrap();
 
 		assert_eq!(res, Left('a'));
 		assert_eq!(rest.to_str(), ~"bc");
 
-		let failure_nomatch = or(chr('a'), chr('b')).run_string("def");
+		let failure_nomatch = chr('a').or(chr('b')).run_string("def");
 
 		assert_eq!(failure_nomatch.get_err(), ~"Neither of the parsers matched: \nCould not find matching char. found: 'd' required: 'a'\nCould not find matching char. found: 'd' required: 'b'");
 
-		let (res, rest) = or(chr('a'), success()).run_string("def").unwrap();
+		let (res, rest) = chr('a').or(success()).run_string("def").unwrap();
 
 		assert_eq!(res, Right(()));
 		assert_eq!(rest.to_str(), ~"def");
@@ -418,13 +422,13 @@ mod test {
 		assert_eq!(txt, ~"ab MAPPED");
 		assert_eq!(rest.to_str(), ~"c");
 
-		let p1 = map(text(~"12"), |txt| from_str::<int>(txt));
+		let p1 = text(~"12").map(|txt| from_str::<int>(txt));
 		let (number, rest) = p1.run_string("12abc").unwrap();
 
 		assert_eq!(number, Some(12));
 		assert_eq!(rest.to_str(), ~"abc");
 
-		let p2 = map(text(~"23"), |txt| from_str::<int>(txt));
+		let p2 = text(~"23").map(|txt| from_str::<int>(txt));
 		let failure_nomatch = p2.run_string("12abc");
 
 		assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: \"12\" required: \"23\"");
@@ -432,7 +436,7 @@ mod test {
 
 	#[test]
 	fn test_flat_map(){
-		let p1 = flatMap(text(~"12"), |txt| match from_str::<int>(txt) { Some(*) => chr('a'), None => chr('b') });
+		let p1 = text(~"12").flatMap(|txt| match from_str::<int>(txt) { Some(*) => chr('a'), None => chr('b') });
 		let (character, rest) = p1.run_string("12abc").unwrap();
 
 		assert_eq!(character, 'a');
@@ -442,7 +446,7 @@ mod test {
 
 		assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: \"23\" required: \"12\"");
 
-		let p2 = flatMap(text(~"cd"), |txt| match from_str::<int>(txt) { Some(*) => chr('a'), None => chr('b') });
+		let p2 = text(~"cd").flatMap(|txt| match from_str::<int>(txt) { Some(*) => chr('a'), None => chr('b') });
 		let (character, rest) = p2.run_string("cdba").unwrap();
 
 		assert_eq!(character, 'b');
