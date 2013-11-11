@@ -23,6 +23,18 @@ pub trait Parser<A, I, O> {
 	fn flatMap<B, BO, U: Parser<B, O, BO>>(self, f: ~fn(v: A) -> U) -> FlatMap<A, Self, U> {
 		FlatMap{ p: self, f: f }
 	}
+
+	fn zeroOrOne(self) -> ZeroOrOne<Self> {
+		ZeroOrOne{ p: self }
+	}
+
+	fn zeroOrMore(self) -> ZeroOrMore<Self> {
+		ZeroOrMore{ p: self }
+	}
+
+	fn oneOrMore(self) -> OneOrMore<Self> {
+		OneOrMore{ p: self }
+	}
 }
 
 // pub type ParseResult<'self, T> = Result<(T, State<'self, char>), ~str>;
@@ -251,6 +263,73 @@ impl<A, B, I: Clone, O: Clone, BO, T: Parser<A, I, O>, U: Parser<B, O, BO>> Pars
 	}
 }
 
+struct ZeroOrOne<T> {
+	priv p: T,
+}
+
+impl<A, I: Clone, T: Parser<A, I, I>> Parser<Option<A>, I, I> for ZeroOrOne<T> {
+	fn run(&self, input: I) -> ParseResult<Option<A>, I> {
+		match self.p.run(input.clone()) {
+			Success(val, inp) => Success(Some(val), inp.clone()),
+			Failure(*) => Success(None, input),
+		}
+	}
+}
+
+struct ZeroOrMore<T> {
+	priv p: T,
+}
+
+impl<A, I: Clone, T: Parser<A, I, I>> Parser<~[A], I, I> for ZeroOrMore<T> {
+	fn run(&self, input: I) -> ParseResult<~[A], I> {
+		let mut values = ~[];
+		let mut input = input;
+
+		loop {
+			match self.p.run(input.clone()) {
+				Success(val, inp) => {
+					values.push(val);
+					input = inp;
+				},
+				Failure(*) => break,
+			}
+		}
+
+		Success(values, input)
+	}
+}
+
+struct OneOrMore<T> {
+	priv p: T,
+}
+
+impl<A, I: Clone, T: Parser<A, I, I>> Parser<~[A], I, I> for OneOrMore<T> {
+	fn run(&self, input: I) -> ParseResult<~[A], I> {
+		let mut values = ~[];
+		let mut input = input;
+
+		match self.p.run(input.clone()) {
+			Success(val, inp) => {
+				values.push(val);
+				input = inp;
+			},
+			Failure(err) => return Failure(err),
+		}
+
+		loop {
+			match self.p.run(input.clone()) {
+				Success(val, inp) => {
+					values.push(val);
+					input = inp;
+				},
+				Failure(*) => break,
+			}
+		}
+
+		Success(values, input)
+	}
+}
+
 
 #[cfg(test)]
 mod test_parser {
@@ -398,5 +477,43 @@ mod test_parser {
 
 		assert_eq!(character, 'b');
 		assert_eq!(rest.content(), &"a");
+	}
+
+	#[test]
+	fn test_zero_or_one(){
+		let p1 = chr('a').zeroOrOne();
+		let (character, rest) = p1.run(StrState::new("abc")).unwrap();
+
+		assert_eq!(character, Some('a'));
+		assert_eq!(rest.content(), &"bc");
+		let (character, rest) = p1.run(rest).unwrap();
+
+		assert_eq!(character, None);
+		assert_eq!(rest.content(), &"bc");
+	}
+
+	#[test]
+	fn test_zero_or_more(){
+		let p1 = chr('a').zeroOrMore();
+		let (character, rest) = p1.run(StrState::new("aaabc")).unwrap();
+
+		assert_eq!(character, ~['a', 'a', 'a']);
+		assert_eq!(rest.content(), &"bc");
+		let (character, rest) = p1.run(rest).unwrap();
+
+		assert_eq!(character, ~[]);
+		assert_eq!(rest.content(), &"bc");
+	}
+
+	#[test]
+	fn test_one_or_more(){
+		let p1 = chr('a').oneOrMore();
+		let (character, rest) = p1.run(StrState::new("aabc")).unwrap();
+
+		assert_eq!(character, ~['a', 'a']);
+		assert_eq!(rest.content(), &"bc");
+		let failure_nomatch = p1.run(rest);
+
+		assert_eq!(failure_nomatch.get_err(), ~"Could not find matching char. found: 'b' required: 'a'");
 	}
 }
