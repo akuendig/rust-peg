@@ -1,6 +1,3 @@
-#[link(name = "peg",
-	   vers = "0.1.0")];
-
 use state::{State, IterState, StrState};
 
 mod state;
@@ -16,11 +13,12 @@ pub trait Parser<A, I, O> {
 		And{ p1: self, p2: p2 }
 	}
 
-	fn map<B>(self, f: ~fn(v: A) -> B) -> Map<A, B, Self> {
+	fn map<'r, B>(self, f: 'r |v: A| -> B) -> Map<'r, A, B, Self> {
 		Map{ p: self, f: f }
 	}
 
-	fn flatMap<B, BO, U: Parser<B, O, BO>>(self, f: ~fn(v: A) -> U) -> FlatMap<A, Self, U> {
+	fn flatMap<'r, B, BO, U: Parser<B, O, BO>>(self, f: 'r |v: A| -> U)
+    -> FlatMap<'r, A, Self, U> {
 		FlatMap{ p: self, f: f }
 	}
 
@@ -66,7 +64,7 @@ impl<T, O> ParseResult<T, O> {
 		}
 	}
 
-	pub fn map<U>(self, f: &fn(v: &T) -> U) -> ParseResult<U, O> {
+	pub fn map<U>(self, f: |v: &T| -> U) -> ParseResult<U, O> {
 		match self {
 			Success(v, rest) => Success(f(&v), rest),
 			Failure(err) => Failure(err),
@@ -235,12 +233,13 @@ impl<A, B, I, O, BO, T: Parser<A, I, O>, U: Parser<B, O, BO>> Parser<(A, B), I, 
 	}
 }
 
-struct Map<A, B, T> {
+struct Map<'self, A, B, T> {
 	priv p: T,
-	priv f: ~fn(v: A) -> B,
+	priv f: 'self |v: A| -> B,
 }
 
-impl<A, B, I, O, T: Parser<A, I, O>> Parser<B, I, O> for Map<A, B, T> {
+impl<'self, A, B, I, O, T: Parser<A, I, O>>
+Parser<B, I, O> for Map<'self, A, B, T> {
 	fn run(&self, input: I) -> ParseResult<B, O> {
 		match self.p.run(input) {
 			Success(val, inp) => Success((self.f)(val), inp),
@@ -249,12 +248,13 @@ impl<A, B, I, O, T: Parser<A, I, O>> Parser<B, I, O> for Map<A, B, T> {
 	}
 }
 
-struct FlatMap<A, T, U> {
+struct FlatMap<'self, A, T, U> {
 	priv p: T,
-	priv f: ~fn(v: A) -> U,
+	priv f: 'self |v: A| -> U,
 }
 
-impl<A, B, I: Clone, O: Clone, BO, T: Parser<A, I, O>, U: Parser<B, O, BO>> Parser<B, I, BO> for FlatMap<A, T, U> {
+impl<'self, A, B, I: Clone, O: Clone, BO, T: Parser<A, I, O>, U: Parser<B, O, BO>>
+Parser<B, I, BO> for FlatMap<'self, A, T, U> {
 	fn run(&self, input: I) -> ParseResult<B, BO> {
 		match self.p.run(input) {
 			Success(val, inp) => (self.f)(val).run(inp),
@@ -271,7 +271,7 @@ impl<A, I: Clone, T: Parser<A, I, I>> Parser<Option<A>, I, I> for ZeroOrOne<T> {
 	fn run(&self, input: I) -> ParseResult<Option<A>, I> {
 		match self.p.run(input.clone()) {
 			Success(val, inp) => Success(Some(val), inp.clone()),
-			Failure(*) => Success(None, input),
+			Failure(..) => Success(None, input),
 		}
 	}
 }
@@ -291,7 +291,7 @@ impl<A, I: Clone, T: Parser<A, I, I>> Parser<~[A], I, I> for ZeroOrMore<T> {
 					values.push(val);
 					input = inp;
 				},
-				Failure(*) => break,
+				Failure(..) => break,
 			}
 		}
 
@@ -322,7 +322,7 @@ impl<A, I: Clone, T: Parser<A, I, I>> Parser<~[A], I, I> for OneOrMore<T> {
 					values.push(val);
 					input = inp;
 				},
-				Failure(*) => break,
+				Failure(..) => break,
 			}
 		}
 
@@ -462,7 +462,7 @@ mod test_parser {
 
 	#[test]
 	fn test_flat_map(){
-		let p1 = text(~"12").flatMap(|txt| match from_str::<int>(txt) { Some(*) => chr('a'), None => chr('b') });
+		let p1 = text(~"12").flatMap(|txt| match from_str::<int>(txt) { Some(..) => chr('a'), None => chr('b') });
 		let (character, rest) = p1.run(StrState::new("12abc")).unwrap();
 
 		assert_eq!(character, 'a');
@@ -472,7 +472,7 @@ mod test_parser {
 
 		assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: \"23\" required: ~\"12\"");
 
-		let p2 = text(~"cd").flatMap(|txt| match from_str::<int>(txt) { Some(*) => chr('a'), None => chr('b') });
+		let p2 = text(~"cd").flatMap(|txt| match from_str::<int>(txt) { Some(..) => chr('a'), None => chr('b') });
 		let (character, rest) = p2.run(StrState::new("cdba")).unwrap();
 
 		assert_eq!(character, 'b');

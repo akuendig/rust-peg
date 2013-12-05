@@ -75,7 +75,7 @@ impl<A: Clone, T: Clone + Iterator<A>> State<A> for IterState<T> {
 
 		for _ in range(0, n) {
 			match cpy.next() {
-				Some(*) => (),
+				Some(..) => (),
 				None => return None,
 			}
 		}
