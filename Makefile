@@ -1,11 +1,13 @@
-LIBRARIES=-L ./lib
-LINKER=
+include rust.mk
 
-compile:
-	rustc --lib $(LIBRARIES) $(LINKER) src/peg.rs --out-dir bin
+RUSTC ?= rustc
+RUSTFLAGS ?=
 
-test:
-	rustc --test $(LIBRARIES) $(LINKER) src/peg.rs -o bin/pegtest && ./bin/pegtest
+.PHONY : all
+all : peg
 
-watch:
-	fswatch ./src "make test && make compile"
+.PHONY : check
+check : check-peg
+
+$(eval $(call RUST_CRATE, ./src/peg/))
+
