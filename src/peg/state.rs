@@ -1,9 +1,28 @@
 use std::str::{CharRange};
 
-pub trait State<A> {
+pub trait State<A>: Clone {
   fn head(&self) -> Option<(A, Self)>;
   fn skip(&self, n: uint) -> Option<Self>;
   fn len(&self) -> uint;
+  fn take(self, n: uint) -> Option<(~[A], Self)> {
+    let mut state = self.clone();
+    let mut arr = ~[];
+    let mut i = n;
+
+    while i > 0 {
+      match state.head() {
+        Some((elem, st)) => {
+          arr.push(elem);
+          state = st;
+        },
+        None => return None,
+      }
+
+      i -= 1
+    }
+
+    Some((arr, state))
+  }
 }
 
 #[deriving(Eq, ToStr, Clone)]
@@ -22,7 +41,7 @@ impl<'a, A: Clone> VecState<'a, A> {
     VecState{ data: data, pos: 0, size: data.len() }
   }
 
-  pub fn take(&self, n: uint) -> Option<(&'a [A], VecState<'a, A>)> {
+  pub fn slice(&self, n: uint) -> Option<(&'a [A], VecState<'a, A>)> {
     if self.len() >= n {
       Some((self.data.slice(self.pos, self.pos + n), self.new_at(self.pos + n)))
     } else {

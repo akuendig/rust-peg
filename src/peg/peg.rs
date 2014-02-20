@@ -2,14 +2,23 @@ use state::{State, IterState, StrState};
 
 mod state;
 
-pub trait Parser<A, I> {
-  fn run(&self, input: I) -> ParseResult<A, I>;
+// Why the State needs to be part of the Parsers type:
+// - We cannot overload the run function. For example, we can
+//    run the Char parser only for an input witch has state
+//    of chars. Thus we would need to have a bound on the
+//    type parameter T of the state. However, we cannot
+//    define such a type parameter in the trait, because this
+//    would restrict other Parsers, for example Map, to
+//    heavily. Thus we need to have a generic type Parameter
+//    for the State the Parser is able to work with.
+pub trait Parser<A, S> {
+  fn run(&self, input: S) -> ParseResult<A, S>;
 
-  fn or<B, PB: Parser<B, I>>(self, other: PB) -> Or<Self, PB> {
+  fn or<B, PB: Parser<B, S>>(self, other: PB) -> Or<Self, PB> {
     Or{ p1: self, p2: other }
   }
 
-  fn and<B, PB: Parser<B, I>>(self, p2: PB) -> And<Self, PB> {
+  fn and<B, PB: Parser<B, S>>(self, p2: PB) -> And<Self, PB> {
     And{ p1: self, p2: p2 }
   }
 
@@ -17,7 +26,7 @@ pub trait Parser<A, I> {
     Map{ p: self, f: f }
   }
 
-  fn flatMap<'r, B, PB: Parser<B, I>>(self, f: 'r |v: A| -> PB)
+  fn flatMap<'r, B, PB: Parser<B, S>>(self, f: 'r |v: A| -> PB)
     -> FlatMap<'r, Self, A, PB> {
     FlatMap{ p: self, f: f }
   }
@@ -45,7 +54,7 @@ pub trait TupleParser {
   }
 }
 
-impl<A, B, I, PA: Parser<(A, B), I>> TupleParser for PA {}
+impl<A, B, T, S: State<T>, PA: Parser<(A, B), S>> TupleParser for PA {}
 
 // pub type ParseResult<'a, T> = Result<(A, State<'a, char>), ~str>;
 #[deriving(Eq, ToStr)]
@@ -84,22 +93,24 @@ impl<A, I> ParseResult<A, I> {
   }
 }
 
-struct Accept;
+struct Accept<A> {
+  priv res: A
+}
 
-impl<I> Parser<(), I> for Accept {
-  fn run<'r>(&self, input: I) -> ParseResult<(), I> {
-    Success((), input)
+impl<A: Clone, T, S: State<T>> Parser<A, S> for Accept<A> {
+  fn run(&self, input: S) -> ParseResult<A, S> {
+    Success(self.res.clone(), input)
   }
 }
 
-pub fn success() -> Accept {
-  Accept
+pub fn success<A: Clone>(result: A) -> Accept<A> {
+  Accept{ res: result }
 }
 
 pub struct Peek;
 
-impl<A: Clone, I: State<A>> Parser<A, I> for Peek {
-  fn run<'r>(&self, input: I) -> ParseResult<A, I> {
+impl<A: Clone, S: State<A>> Parser<A, S> for Peek {
+  fn run(&self, input: S) -> ParseResult<A, S> {
     match input.head() {
       Some((c, inp)) => Success(c, inp),
       None => Failure(format!("Could not match char because EOI.")),
@@ -115,8 +126,8 @@ struct Elem<A> {
   priv e: A
 }
 
-impl<A: Clone + Eq, I: Clone + Iterator<A>> Parser<A, IterState<I>> for Elem<A> {
-  fn run(&self, input: IterState<I>) -> ParseResult<A, IterState<I>> {
+impl<A: Clone + Eq, S: State<A>> Parser<A, S> for Elem<A> {
+  fn run(&self, input: S) -> ParseResult<A, S> {
     match input.head() {
       Some((head, inp)) =>
         if head == self.e { Success(self.e.clone(), inp) }
@@ -153,8 +164,8 @@ struct Elems<A> {
   priv elems: ~[A]
 }
 
-impl<A: Clone + Eq, I: Clone + Iterator<A>> Parser<~[A], IterState<I>> for Elems<A> {
-  fn run(&self, input: IterState<I>) -> ParseResult<~[A], IterState<I>> {
+impl<A: Clone + Eq, S: State<A>> Parser<~[A], S> for Elems<A> {
+  fn run(&self, input: S) -> ParseResult<~[A], S> {
     match input.take(self.elems.len()) {
       Some((t, inp)) =>
         if t == self.elems { Success(t, inp) }
@@ -191,8 +202,8 @@ struct AnyOf<A> {
   priv valid: ~[A]
 }
 
-impl<A: Clone + Eq, I: State<A> + Clone> Parser<A, I> for AnyOf<A> {
-  fn run(&self, input: I) -> ParseResult<A, I> {
+impl<A: Clone + Eq, S: State<A>> Parser<A, S> for AnyOf<A> {
+  fn run(&self, input: S) -> ParseResult<A, S> {
     match input.head() {
       Some((ref c, ref inp)) if self.valid.contains(c) => Success(c.clone(), inp.clone()),
       Some((ref c, _)) => Failure(format!("Could not find matching char. found: {:?} required any of: {:?}", *c, self.valid)),
@@ -219,9 +230,9 @@ enum Either<L, R> {
   Right(R),
 }
 
-impl<A, B, I: Clone, PA: Parser<A, I>, PB: Parser<B, I>>
-Parser<Either<A, B>, I> for Or<PA, PB> {
-  fn run(&self, input: I) -> ParseResult<Either<A, B>, I> {
+impl<A, B, T, S: State<T> + Clone, PA: Parser<A, S>, PB: Parser<B, S>>
+Parser<Either<A, B>, S> for Or<PA, PB> {
+  fn run(&self, input: S) -> ParseResult<Either<A, B>, S> {
     match self.p1.run(input.clone()) {
       Success(val, inp) => Success(Left(val), inp),
       Failure(err1) =>
@@ -238,9 +249,9 @@ struct And<PA, PB> {
   priv p2: PB,
 }
 
-impl<A, B, I, PA: Parser<A, I>, PB: Parser<B, I>>
-Parser<(A, B), I> for And<PA, PB> {
-  fn run(&self, input: I) -> ParseResult<(A, B), I> {
+impl<A, B, T, S: State<T>, PA: Parser<A, S>, PB: Parser<B, S>>
+Parser<(A, B), S> for And<PA, PB> {
+  fn run(&self, input: S) -> ParseResult<(A, B), S> {
     match self.p1.run(input) {
       Success(val1, inp1) =>
         match self.p2.run(inp1) {
@@ -256,8 +267,8 @@ struct DropLeft<PA> {
   priv p: PA,
 }
 
-impl<A, B, I, PA: Parser<(A, B), I>> Parser<B, I> for DropLeft<PA> {
-  fn run(&self, input: I) -> ParseResult<B, I> {
+impl<A, B, T, S: State<T>, PA: Parser<(A, B), S>> Parser<B, S> for DropLeft<PA> {
+  fn run(&self, input: S) -> ParseResult<B, S> {
     match self.p.run(input) {
       Success((_, b), inp) => Success(b, inp),
       Failure(err) => Failure(err),
@@ -269,8 +280,8 @@ struct DropRight<PA> {
   priv p: PA,
 }
 
-impl<A, B, I, PA: Parser<(A, B), I>> Parser<A, I> for DropRight<PA> {
-  fn run(&self, input: I) -> ParseResult<A, I> {
+impl<A, B, T, S: State<T>, PA: Parser<(A, B), S>> Parser<A, S> for DropRight<PA> {
+  fn run(&self, input: S) -> ParseResult<A, S> {
     match self.p.run(input) {
       Success((a, _), inp) => Success(a, inp),
       Failure(err) => Failure(err),
@@ -283,9 +294,8 @@ struct Map<'a, PA, A, B> {
   priv f: 'a |v: A| -> B,
 }
 
-impl<'a, A, B, I, PA: Parser<A, I>>
-Parser<B, I> for Map<'a, PA, A, B> {
-  fn run(&self, input: I) -> ParseResult<B, I> {
+impl<'a, A, B, T, S: State<T>, PA: Parser<A, S>> Parser<B, S> for Map<'a, PA, A, B> {
+  fn run(&self, input: S) -> ParseResult<B, S> {
     match self.p.run(input) {
       Success(val, inp) => Success((self.f)(val), inp),
       Failure(err) => Failure(err),
@@ -298,9 +308,9 @@ struct FlatMap<'a, PA, A, PB> {
   priv f: 'a |v: A| -> PB,
 }
 
-impl<'a, A, B, I: Clone, PA: Parser<A, I>, PB: Parser<B, I>>
-Parser<B, I> for FlatMap<'a, PA, A, PB> {
-  fn run(&self, input: I) -> ParseResult<B, I> {
+impl<'a, A, B, T, S: State<T>, PA: Parser<A, S>, PB: Parser<B, S>>
+Parser<B, S> for FlatMap<'a, PA, A, PB> {
+  fn run(&self, input: S) -> ParseResult<B, S> {
     match self.p.run(input) {
       Success(val, inp) => (self.f)(val).run(inp),
       Failure(err) => Failure(err),
@@ -312,8 +322,8 @@ struct ZeroOrOne<PA> {
   priv p: PA,
 }
 
-impl<A, I: Clone, PA: Parser<A, I>> Parser<Option<A>, I> for ZeroOrOne<PA> {
-  fn run(&self, input: I) -> ParseResult<Option<A>, I> {
+impl<A, T, S: State<T>, PA: Parser<A, S>> Parser<Option<A>, S> for ZeroOrOne<PA> {
+  fn run(&self, input: S) -> ParseResult<Option<A>, S> {
     match self.p.run(input.clone()) {
       Success(val, inp) => Success(Some(val), inp.clone()),
       Failure(..) => Success(None, input),
@@ -325,8 +335,8 @@ struct ZeroOrMore<PA> {
   priv p: PA,
 }
 
-impl<A, I: Clone, PA: Parser<A, I>> Parser<~[A], I> for ZeroOrMore<PA> {
-  fn run(&self, input: I) -> ParseResult<~[A], I> {
+impl<A, T, S: State<T>, PA: Parser<A, S>> Parser<~[A], S> for ZeroOrMore<PA> {
+  fn run(&self, input: S) -> ParseResult<~[A], S> {
     let mut values = ~[];
     let mut input = input;
 
@@ -348,30 +358,30 @@ struct OneOrMore<PA> {
   priv p: PA,
 }
 
-impl<A, I: Clone, PA: Parser<A, I>> Parser<~[A], I> for OneOrMore<PA> {
-  fn run(&self, input: I) -> ParseResult<~[A], I> {
+impl<A, T, S: State<T> + Clone, PA: Parser<A, S>> Parser<~[A], S> for OneOrMore<PA> {
+  fn run(&self, input: S) -> ParseResult<~[A], S> {
     let mut values = ~[];
-    let mut input = input;
+    let mut inp = input;
 
-    match self.p.run(input.clone()) {
+    match self.p.run(inp.clone()) {
       Success(val, inp) => {
         values.push(val);
-        input = inp;
+        inp = inp;
       },
       Failure(err) => return Failure(err),
     }
 
     loop {
-      match self.p.run(input.clone()) {
+      match self.p.run(inp.clone()) {
         Success(val, inp) => {
           values.push(val);
-          input = inp;
+          inp = inp;
         },
         Failure(..) => break,
       }
     }
 
-    Success(values, input)
+    Success(values, inp)
   }
 }
 
