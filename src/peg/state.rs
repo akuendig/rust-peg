@@ -1,4 +1,5 @@
 use std::str::{CharRange};
+use std::rc::{Rc};
 
 pub trait State<A>: Clone {
   fn head(&self) -> Option<(A, Self)>;
@@ -25,45 +26,46 @@ pub trait State<A>: Clone {
   }
 }
 
-#[deriving(Eq, ToStr, Clone)]
-pub struct VecState<'a, A> {
-  priv data: &'a [A],
+#[deriving(Eq, Clone)]
+pub struct VecState<A> {
+  priv data: Rc<~[A]>,
   priv pos: uint,
   priv size: uint,
 }
 
-impl<'a, A: Clone> VecState<'a, A> {
-  fn new_at(&self, pos: uint) -> VecState<'a, A> {
-    VecState{ data: self.data, pos: pos, size: self.size }
+impl<A: Clone> VecState<A> {
+  fn new_at(&self, pos: uint) -> VecState<A> {
+    VecState{ data: self.data.clone(), pos: pos, size: self.size }
   }
 
-  pub fn new(data: &'a [A]) -> VecState<'a, A> {
-    VecState{ data: data, pos: 0, size: data.len() }
+  pub fn new(data: ~[A]) -> VecState<A> {
+    let len = data.len();
+    VecState{ data: Rc::new(data), pos: 0, size: len }
   }
 
-  pub fn slice(&self, n: uint) -> Option<(&'a [A], VecState<'a, A>)> {
-    if self.len() >= n {
-      Some((self.data.slice(self.pos, self.pos + n), self.new_at(self.pos + n)))
-    } else {
-      None
-    }
-  }
+  // pub fn slice(&self, n: uint) -> Option<(~[A], VecState<A>)> {
+  //   if self.len() >= n {
+  //     Some((self.data.slice(self.pos, self.pos + n), self.new_at(self.pos + n)))
+  //   } else {
+  //     None
+  //   }
+  // }
 
-  pub fn content(&self) -> &'a [A] {
-    self.data.slice(self.pos, self.size)
+  pub fn content(&self) -> ~[A] {
+    self.data.borrow().clone()
   }
 }
 
-impl<'a, A: Clone> State<A> for VecState<'a, A> {
-  fn head(&self) -> Option<(A, VecState<'a, A>)> {
+impl<A: Clone> State<A> for VecState<A> {
+  fn head(&self) -> Option<(A, VecState<A>)> {
     if self.len() > 0 {
-      Some((self.data[self.pos].clone(), self.new_at(self.pos + 1)))
+      Some((self.data.borrow()[self.pos].clone(), self.new_at(self.pos + 1)))
     } else {
       None
     }
   }
 
-  fn skip(&self, n: uint) -> Option<VecState<'a, A>> {
+  fn skip(&self, n: uint) -> Option<VecState<A>> {
     if self.len() >= n {
       Some(self.new_at(self.pos + n))
     } else {
@@ -86,20 +88,27 @@ impl<A: Clone, T: Clone + Iterator<A>> State<A> for IterState<T> {
     let mut cpy = self.data.clone();
 
     let head = cpy.next();
+
+    // We need to clone the cpy variable inside the closure,
+    // because we are not allowed to move out of a captured
+    // variable of a closure.
     head.map(|c: A| (c, IterState{ data: cpy.clone() }))
   }
 
   fn skip(&self, n: uint) -> Option<IterState<T>> {
     let mut cpy = self.data.clone();
+    let mut i = n;
 
-    for _ in range(0, n) {
+    while i > 0 {
       match cpy.next() {
         Some(..) => (),
         None => return None,
       }
+
+      i -= 1;
     }
 
-    Some(IterState{ data: cpy.clone() })
+    Some(IterState{ data: cpy })
   }
 
   fn len(&self) -> uint {
@@ -113,48 +122,35 @@ impl<A: Clone, T: Clone + Iterator<A>> IterState<T> {
     IterState{ data: data }
   }
 
-  pub fn take(&self, n: uint) -> Option<(~[A], IterState<T>)> {
-    let mut cpy = self.data.clone();
-    let mut slice: ~[A] = ~[];
-
-    for _ in range(0, n) {
-      match cpy.next() {
-        Some(v) => slice.push(v),
-        None => return None,
-      }
-    }
-
-    Some((slice, IterState{ data: cpy.clone() }))
-  }
-
   pub fn content(&self) -> T {
     self.data.clone()
   }
 }
 
-#[deriving(Eq, ToStr, Clone)]
-pub struct StrState<'a> {
-    priv data: &'a str,
+#[deriving(Eq, Clone)]
+pub struct StrState {
+    priv data: Rc<~str>,
     priv next: uint,
     priv pos: uint,
     priv size: uint,
 }
 
-impl<'a> StrState<'a> {
-  fn new_at(&self, next: uint, pos: uint) -> StrState<'a> {
+impl StrState {
+  fn new_at(&self, next: uint, pos: uint) -> StrState {
     // println(format!("{:?} {:?} {:?}", self.data, pos, self.size));
     // println(format!("{:?}", StrState{ data: self.data, pos: pos, size: self.size }));
-    StrState{ data: self.data, next: next, pos: pos, size: self.size }
+    StrState{ data: self.data.clone(), next: next, pos: pos, size: self.size }
   }
 
-  pub fn new(data: &'a str) -> StrState<'a> {
-    StrState{ data: data, next: 0, pos: 0, size: data.char_len() }
+  pub fn new(data: ~str) -> StrState {
+    let len = data.len();
+    StrState{ data: Rc::new(data), next: 0, pos: 0, size: len }
   }
 
-  pub fn take(&self, n: uint) -> Option<(&'a str, StrState<'a>)> {
+  pub fn take(&self, n: uint) -> Option<(~str, StrState)> {
     // Prevent index error on CharRange calculation by having a fastpath for n == 0
     if n == 0 {
-      return Some((&"", self.clone()))
+      return Some((~"", self.clone()))
     }
 
     if self.len() < n {
@@ -162,25 +158,28 @@ impl<'a> StrState<'a> {
     }
 
     let mut next = self.next;
+    let mut i = n;
 
-    for _ in range(0, n) {
-      let char_range = self.data.char_range_at(next);
+    while i > 0 {
+      let char_range = self.data.borrow().char_range_at(next);
 
       next = char_range.next;
+
+      i -= 1;
     }
 
-    Some((self.data.slice(self.pos, next), self.new_at(next, self.pos+n)))
+    Some((self.data.borrow().slice(self.pos, next).into_owned(), self.new_at(next, self.pos+n)))
   }
 
-  pub fn content(&self) -> &'a str {
-    self.data.slice(self.pos, self.data.len())
+  pub fn content(&self) -> ~str {
+    self.data.borrow().slice(self.pos, self.data.borrow().len()).into_owned()
   }
 }
 
-impl<'a> State<char> for StrState<'a> {
-  fn head(&self) -> Option<(char, StrState<'a>)> {
+impl State<char> for StrState {
+  fn head(&self) -> Option<(char, StrState)> {
     if self.len() > 0 {
-      let CharRange {ch, next} = self.data.char_range_at(self.next);
+      let CharRange {ch, next} = self.data.borrow().char_range_at(self.next);
 
       Some((ch, self.new_at(next, self.pos+1)))
     } else {
@@ -188,7 +187,7 @@ impl<'a> State<char> for StrState<'a> {
     }
   }
 
-  fn skip(&self, n: uint) -> Option<StrState<'a>> {
+  fn skip(&self, n: uint) -> Option<StrState> {
     self.take(n).map(|(_, inp)| inp)
   }
 
@@ -200,7 +199,7 @@ impl<'a> State<char> for StrState<'a> {
 
 #[cfg(test)]
 mod test_vec_state {
-  use super::VecState;
+  use super::{State, VecState};
 
   #[test]
   fn head() {
@@ -237,12 +236,12 @@ mod test_vec_state {
     let values = ~[1, 2, 3];
     let (data, rest) = VecState::new(values).take(2).unwrap();
 
-    assert_eq!(data, &[1, 2]);
+    assert_eq!(data, ~[1, 2]);
     assert_eq!(rest.len(), 1);
 
     let (data, rest) = rest.take(1).unwrap();
 
-    assert_eq!(data, &[3]);
+    assert_eq!(data, ~[3]);
     assert_eq!(rest.len(), 0);
     assert_eq!(rest.take(2), None);
   }
@@ -263,16 +262,16 @@ mod test_vec_state {
   #[test]
   fn content() {
     let values = ~[1, 2, 3];
-    assert_eq!(VecState::new(values).content(), &[1, 2, 3]);
+    assert_eq!(VecState::new(values).content(), ~[1, 2, 3]);
 
     let values: ~[int] = ~[];
-    assert_eq!(VecState::new(values).content(), &[]);
+    assert_eq!(VecState::new(values).content(), ~[]);
   }
 }
 
 #[cfg(test)]
 mod test_iter_state {
-  use super::IterState;
+  use super::{State, IterState};
 
   #[test]
   fn head() {
@@ -346,10 +345,10 @@ mod test_iter_state {
 
 #[cfg(test)]
 mod test_str_state {
-  use super::StrState;
+  use super::{State, StrState};
 
   fn input() -> StrState {
-     StrState::new("世界")
+     StrState::new(~"世界")
   }
 
   #[test]
@@ -382,11 +381,11 @@ mod test_str_state {
   fn take() {
     let (data, rest) = input().take(2).unwrap();
 
-    assert_eq!(data, &"世界");
+    assert_eq!(data, ~"世界");
     assert_eq!(rest.len(), 0);
 
     let (data, rest) = rest.take(0).unwrap();
-    assert_eq!(data, &"");
+    assert_eq!(data, ~"");
     assert_eq!(rest.len(), 0);
 
     assert_eq!(rest.take(2), None);
@@ -408,7 +407,7 @@ mod test_str_state {
 
   #[test]
   fn content() {
-    assert_eq!(input().content(), &"世界");
-    assert_eq!(StrState::new("").content(), &"");
+    assert_eq!(input().content(), ~"世界");
+    assert_eq!(StrState::new(~"").content(), ~"");
   }
 }
