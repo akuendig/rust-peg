@@ -1,7 +1,9 @@
-use peg::{Parser, TupleParser, anyOfChar, AnyOfChar, chr, ZeroOrMore};
+use peg::{anyOfChar, AnyOfChar, chr};
+use parser::{Parser, TupleParser, ZeroOrMore};
 use state::StrState;
 
 mod peg;
+mod parser;
 mod state;
 
 static WS_CHARS: &'static str = "\x20\x09\x0A\x0D";
