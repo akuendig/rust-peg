@@ -5,7 +5,6 @@
 
 extern crate extra;
 
-pub mod peg;
 pub mod parser;
 pub mod state;
 pub mod json;
