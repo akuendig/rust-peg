@@ -171,12 +171,19 @@ pub struct Elems<A> {
 
 impl<A: Clone + Eq, S: State<A>> Parser<~[A], S> for Elems<A> {
   fn run(&self, input: S) -> ParseResult<~[A], S> {
-    match input.take(self.elems.len()) {
-      Some((t, inp)) =>
-        if t == self.elems { Success(t, inp) }
-        else { Failure(format!("Could not find matching string. found: {:?} required: {:?}", t, self.elems)) },
-      None => Failure(format!("Could not match string {:?} because EOI.", self.elems)),
+    let mut state = input.clone();
+
+    for elem in self.elems.iter() {
+      match state.head() {
+        Some((ref elem_, ref state_)) if elem == elem_ => state = state_.clone(),
+        Some((ref elem_, _)) =>
+          return Failure(format!("Could not find matching string. found: {:?} required: {:?}", elem_, elem)),
+        None =>
+          return Failure(format!("Could not match string {:?} because EOI.", self.elems)),
+      }
     }
+
+    Success(self.elems.clone(), state)
   }
 }
 
@@ -456,7 +463,7 @@ mod test_parser {
 
     let failure_nomatch = text(~"af").run(input());
 
-    assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: \"He\" required: ~\"af\"");
+    assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: ~\"He\" required: ~\"af\"");
 
     let failure_eof = text(~"ab").run(StrState::new(~""));
 
@@ -472,11 +479,11 @@ mod test_parser {
 
     let failure_nomatch = anyOfChar(~"ab").run(StrState::new(~"def"));
 
-    assert_eq!(failure_nomatch.get_err(), ~"Could not find matching char. found: 'd' required any of: ~['a', 'b']");
+    assert_eq!(failure_nomatch.get_err(), ~"Could not find matching char. found: 'd' required any of: ~\"ab\"");
 
     let failure_eof = anyOfChar(~"ab").run(StrState::new(~""));
 
-    assert_eq!(failure_eof.get_err(), ~"Could not match any of ~['a', 'b'] because EOI.");
+    assert_eq!(failure_eof.get_err(), ~"Could not match any of ~\"ab\" because EOI.");
   }
 
   #[test]
@@ -530,7 +537,7 @@ mod test_parser {
     let p2 = text(~"23").map(toInt);
     let failure_nomatch = p2.run(StrState::new(~"12abc"));
 
-    assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: \"12\" required: ~\"23\"");
+    assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: ~\"12\" required: ~\"23\"");
   }
 
   #[test]
@@ -550,7 +557,7 @@ mod test_parser {
 
     let failure_nomatch = p1.run(StrState::new(~"23abc"));
 
-    assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: \"23\" required: ~\"12\"");
+    assert_eq!(failure_nomatch.get_err(), ~"Could not find matching string. found: ~\"23\" required: ~\"12\"");
 
     fn flatMapFn2(txt: ~str) -> Char { match from_str::<int>(txt) { Some(..) => chr('a'), None => chr('b') } }
     let p2 = text(~"cd").flatMap(flatMapFn2);

@@ -5,25 +5,6 @@ pub trait State<A>: Clone {
   fn head(&self) -> Option<(A, Self)>;
   fn skip(&self, n: uint) -> Option<Self>;
   fn len(&self) -> uint;
-  fn take(self, n: uint) -> Option<(~[A], Self)> {
-    let mut state = self.clone();
-    let mut arr = ~[];
-    let mut i = n;
-
-    while i > 0 {
-      match state.head() {
-        Some((elem, st)) => {
-          arr.push(elem);
-          state = st;
-        },
-        None => return None,
-      }
-
-      i -= 1
-    }
-
-    Some((arr, state))
-  }
 }
 
 #[deriving(Eq, Clone)]
@@ -43,13 +24,13 @@ impl<A: Clone> VecState<A> {
     VecState{ data: Rc::new(data), pos: 0, size: len }
   }
 
-  // pub fn slice(&self, n: uint) -> Option<(~[A], VecState<A>)> {
-  //   if self.len() >= n {
-  //     Some((self.data.slice(self.pos, self.pos + n), self.new_at(self.pos + n)))
-  //   } else {
-  //     None
-  //   }
-  // }
+  pub fn take(&self, n: uint) -> Option<(~[A], VecState<A>)> {
+    if self.len() >= n {
+      Some((self.data.borrow().slice(self.pos, self.pos + n).into_owned(), self.new_at(self.pos + n)))
+    } else {
+      None
+    }
+  }
 
   pub fn content(&self) -> ~[A] {
     self.data.borrow().clone()
@@ -81,6 +62,33 @@ impl<A: Clone> State<A> for VecState<A> {
 #[deriving(Eq, ToStr, Clone)]
 pub struct IterState<T> {
     priv data: T,
+}
+
+impl<A: Clone, T: Clone + Iterator<A>> IterState<T> {
+  pub fn new(data: T) -> IterState<T> {
+    IterState{ data: data }
+  }
+
+  fn take(&self, n: uint) -> Option<(~[A], IterState<T>)> {
+    let mut cpy = self.data.clone();
+    let mut arr = ~[];
+    let mut i = n;
+
+    while i > 0 {
+      match cpy.next() {
+        Some(el) => arr.push(el),
+        None => return None,
+      }
+
+      i -= 1
+    }
+
+    Some((arr, IterState::new(cpy)))
+  }
+
+  pub fn content(&self) -> T {
+    self.data.clone()
+  }
 }
 
 impl<A: Clone, T: Clone + Iterator<A>> State<A> for IterState<T> {
@@ -117,16 +125,6 @@ impl<A: Clone, T: Clone + Iterator<A>> State<A> for IterState<T> {
   }
 }
 
-impl<A: Clone, T: Clone + Iterator<A>> IterState<T> {
-  pub fn new(data: T) -> IterState<T> {
-    IterState{ data: data }
-  }
-
-  pub fn content(&self) -> T {
-    self.data.clone()
-  }
-}
-
 #[deriving(Eq, Clone)]
 pub struct StrState {
     priv data: Rc<~str>,
@@ -137,13 +135,11 @@ pub struct StrState {
 
 impl StrState {
   fn new_at(&self, next: uint, pos: uint) -> StrState {
-    // println(format!("{:?} {:?} {:?}", self.data, pos, self.size));
-    // println(format!("{:?}", StrState{ data: self.data, pos: pos, size: self.size }));
     StrState{ data: self.data.clone(), next: next, pos: pos, size: self.size }
   }
 
   pub fn new(data: ~str) -> StrState {
-    let len = data.len();
+    let len = data.char_len();
     StrState{ data: Rc::new(data), next: 0, pos: 0, size: len }
   }
 
@@ -168,7 +164,7 @@ impl StrState {
       i -= 1;
     }
 
-    Some((self.data.borrow().slice(self.pos, next).into_owned(), self.new_at(next, self.pos+n)))
+    Some((self.data.borrow().slice(self.next, next).into_owned(), self.new_at(next, self.pos+n)))
   }
 
   pub fn content(&self) -> ~str {
