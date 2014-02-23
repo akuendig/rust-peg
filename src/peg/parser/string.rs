@@ -1,24 +1,25 @@
-use parser::{Parser, ParseResult, Success, Failure};
-use state::{State, StrState};
+use parser::{Map, Parser, ParseResult, Success, Failure};
+use parser::generic::{one, One};
+use state::{StrState};
+use std::str::from_chars;
 
-#[deriving(Eq, ToStr, Clone)]
-pub struct Char {
-    priv c: char
+mod generic;
+
+pub trait ConcatenableParser {
+  fn concat(&self) -> Map<Self, ~[char], ~str>;
 }
 
-impl Parser<char, StrState> for Char {
-  fn run(&self, input: StrState) -> ParseResult<char, StrState> {
-    match input.head() {
-      Some((head, inp)) =>
-        if head == self.c { Success(self.c, inp) }
-        else { Failure(format!("Could not find matching char. found: {:?} required: {:?}", head, self.c)) },
-      None => Failure(format!("Could not match char {:?} because EOI.", self.c)),
-    }
+impl<A: Parser<~[char], StrState>> ConcatenableParser for A {
+  fn concat(&self) -> Map<A, ~[char], ~str> {
+    fn cat(input: ~[char]) -> ~str { from_chars(input) }
+    self.map(cat)
   }
 }
 
-pub fn chr(c: char) -> Char {
-  Char{ c: c }
+type Chr = One<char, StrState>;
+
+pub fn chr(c: char) -> Chr {
+  one(c)
 }
 
 #[deriving(Eq, ToStr, Clone)]
@@ -31,7 +32,7 @@ impl Parser<~str, StrState> for Text {
     match input.take(self.txt.char_len()) {
       Some((t, inp)) =>
         if t == self.txt { Success(self.txt.clone(), inp) }
-        else { Failure(format!("Could not find matching string. found: {:?} required: {:?}", t, self.txt)) },
+        else { Failure(format!("Could not find matching string. Found: {:?} required: {:?}", t, self.txt)) },
       None => Failure(format!("Could not match string {:?} because EOI.", self.txt)),
     }
   }
@@ -41,29 +42,16 @@ pub fn text(txt: ~str) -> Text {
   Text{ txt: txt }
 }
 
-#[deriving(Eq, ToStr, Clone)]
-pub struct AnyOfChar {
-  priv valid: ~str
-}
+type AnyOf = generic::AnyOf<char, StrState>;
 
-impl Parser<char, StrState> for AnyOfChar {
-  fn run(&self, input: StrState) -> ParseResult<char, StrState> {
-    match input.head() {
-      Some((ref c, ref inp)) if self.valid.contains_char(*c) => Success(*c, inp.clone()),
-      Some((ref c, _)) => Failure(format!("Could not find matching char. found: {:?} required any of: {:?}", *c, self.valid)),
-      None => Failure(format!("Could not match any of {:?} because EOI.", self.valid)),
-    }
-  }
-}
-
-pub fn anyOfChar(valid: ~str) -> AnyOfChar {
-  AnyOfChar{ valid: valid }
+pub fn anyOf(valid: ~str) -> AnyOf {
+  return generic::anyOf(valid.chars().to_owned_vec())
 }
 
 #[cfg(test)]
 mod tests {
   use parser::{Parser};
-  use parser::string::{chr, text, anyOfChar};
+  use parser::string::{chr, text, anyOf};
   use state::{StrState};
 
   fn input() -> StrState {
@@ -79,7 +67,7 @@ mod tests {
 
     let failure_nomatch = chr('b').run(input());
 
-    assert_eq!(failure_nomatch.err(), ~"Could not find matching char. found: 'H' required: 'b'");
+    assert_eq!(failure_nomatch.err(), ~"Could not find matching element. Found: 'H' required: 'b'");
 
     let failure_eof = chr('a').run(StrState::new(~""));
 
@@ -95,7 +83,7 @@ mod tests {
 
     let failure_nomatch = text(~"af").run(input());
 
-    assert_eq!(failure_nomatch.err(), ~"Could not find matching string. found: ~\"He\" required: ~\"af\"");
+    assert_eq!(failure_nomatch.err(), ~"Could not find matching string. Found: ~\"He\" required: ~\"af\"");
 
     let failure_eof = text(~"ab").run(StrState::new(~""));
 
@@ -104,17 +92,17 @@ mod tests {
 
   #[test]
   fn test_any_of_char(){
-    let (c, rest) = anyOfChar(~"Hb").run(input()).unwrap();
+    let (c, rest) = anyOf(~"Hb").run(input()).unwrap();
 
     assert_eq!(c, 'H');
     assert_eq!(rest.content(), ~"ello, 世界");
 
-    let failure_nomatch = anyOfChar(~"ab").run(StrState::new(~"def"));
+    let failure_nomatch = anyOf(~"ab").run(StrState::new(~"def"));
 
-    assert_eq!(failure_nomatch.err(), ~"Could not find matching char. found: 'd' required any of: ~\"ab\"");
+    assert_eq!(failure_nomatch.err(), ~"Could not find matching element. Found: 'd' required any of: ~['a', 'b']");
 
-    let failure_eof = anyOfChar(~"ab").run(StrState::new(~""));
+    let failure_eof = anyOf(~"ab").run(StrState::new(~""));
 
-    assert_eq!(failure_eof.err(), ~"Could not match any of ~\"ab\" because EOI.");
+    assert_eq!(failure_eof.err(), ~"Could not match any of ~['a', 'b'] because EOI.");
   }
 }

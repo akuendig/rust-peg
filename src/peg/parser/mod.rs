@@ -15,7 +15,7 @@ pub mod string;
 pub trait Parser<A, S>: Clone {
   fn run(&self, input: S) -> ParseResult<A, S>;
 
-  fn or<B, PB: Parser<B, S>>(&self, other: PB) -> Or<Self, PB> {
+  fn or<A, PB: Parser<A, S>>(&self, other: PB) -> Or<Self, PB> {
     Or{ p1: self.clone(), p2: other }
   }
 
@@ -32,16 +32,16 @@ pub trait Parser<A, S>: Clone {
     FlatMap{ p: self.clone(), f: f }
   }
 
-  fn zeroOrOne(&self) -> ZeroOrOne<Self> {
-    ZeroOrOne{ p: self.clone() }
+  fn optional(&self) -> Optional<Self> {
+    Optional{ p: self.clone() }
   }
 
-  fn zeroOrMore(&self) -> ZeroOrMore<Self> {
-    ZeroOrMore{ p: self.clone() }
+  fn many(&self) -> Many<Self> {
+    Many{ p: self.clone() }
   }
 
-  fn oneOrMore(&self) -> OneOrMore<Self> {
-    OneOrMore{ p: self.clone() }
+  fn manyOne(&self) -> ManyOne<Self> {
+    ManyOne{ p: self.clone() }
   }
 }
 
@@ -103,20 +103,14 @@ pub struct Or<PA, PB> {
   priv p2: PB,
 }
 
-#[deriving(Eq, ToStr, Clone)]
-pub enum Either<L, R> {
-  Left(L),
-  Right(R),
-}
-
-impl<A, B, T, S: State<T> + Clone, PA: Parser<A, S>, PB: Parser<B, S>>
-Parser<Either<A, B>, S> for Or<PA, PB> {
-  fn run(&self, input: S) -> ParseResult<Either<A, B>, S> {
+impl<A, T, S: State<T>, PA: Parser<A, S>, PB: Parser<A, S>>
+Parser<A, S> for Or<PA, PB> {
+  fn run(&self, input: S) -> ParseResult<A, S> {
     match self.p1.run(input.clone()) {
-      Success(val, inp) => Success(Left(val), inp),
+      Success(val, inp) => Success(val, inp),
       Failure(err1) =>
         match self.p2.run(input.clone()) {
-          Success(val, inp) => Success(Right(val), inp),
+          Success(val, inp) => Success(val, inp),
           Failure(err2) => Failure(format!("Neither of the parsers matched: \n{}\n{}", err1, err2))
         }
     }
@@ -203,11 +197,11 @@ Parser<B, S> for FlatMap<PA, A, PB> {
 }
 
 #[deriving(Eq, ToStr, Clone)]
-pub struct ZeroOrOne<PA> {
+pub struct Optional<PA> {
   priv p: PA,
 }
 
-impl<A, T, S: State<T>, PA: Parser<A, S>> Parser<Option<A>, S> for ZeroOrOne<PA> {
+impl<A, T, S: State<T>, PA: Parser<A, S>> Parser<Option<A>, S> for Optional<PA> {
   fn run(&self, input: S) -> ParseResult<Option<A>, S> {
     match self.p.run(input.clone()) {
       Success(val, inp) => Success(Some(val), inp.clone()),
@@ -217,11 +211,11 @@ impl<A, T, S: State<T>, PA: Parser<A, S>> Parser<Option<A>, S> for ZeroOrOne<PA>
 }
 
 #[deriving(Eq, ToStr, Clone)]
-pub struct ZeroOrMore<PA> {
+pub struct Many<PA> {
   priv p: PA,
 }
 
-impl<A, T, S: State<T>, PA: Parser<A, S>> Parser<~[A], S> for ZeroOrMore<PA> {
+impl<A, T, S: State<T>, PA: Parser<A, S>> Parser<~[A], S> for Many<PA> {
   fn run(&self, input: S) -> ParseResult<~[A], S> {
     let mut values = ~[];
     let mut input = input;
@@ -241,11 +235,11 @@ impl<A, T, S: State<T>, PA: Parser<A, S>> Parser<~[A], S> for ZeroOrMore<PA> {
 }
 
 #[deriving(Eq, ToStr, Clone)]
-pub struct OneOrMore<PA> {
+pub struct ManyOne<PA> {
   priv p: PA,
 }
 
-impl<A, T, S: State<T> + Clone, PA: Parser<A, S>> Parser<~[A], S> for OneOrMore<PA> {
+impl<A, T, S: State<T> + Clone, PA: Parser<A, S>> Parser<~[A], S> for ManyOne<PA> {
   fn run(&self, input: S) -> ParseResult<~[A], S> {
     let mut values = ~[];
     let mut inp = input;
@@ -275,9 +269,9 @@ impl<A, T, S: State<T> + Clone, PA: Parser<A, S>> Parser<~[A], S> for OneOrMore<
 #[cfg(test)]
 mod tests {
   use state::StrState;
-  use parser::{Parser, TupleParser, ParseResult, Success, Failure, Left, Right};
-  use parser::generic::{success};
-  use parser::string::{chr, text, Char};
+  use parser::{Parser, TupleParser, ParseResult, Success, Failure};
+  use parser::generic::{One, success};
+  use parser::string::{chr, text};
 
   fn input() -> StrState {
      StrState::new(~"Hello, 世界")
@@ -296,7 +290,7 @@ mod tests {
   }
 
   #[test]
-  fn test_and(){
+  fn test_and() {
     let (res, rest) = chr('H').and(chr('e')).run(input()).unwrap();
 
     assert_eq!(res, ('H', 'e'));
@@ -304,7 +298,7 @@ mod tests {
 
     let failure_nomatch = chr('a').and(chr('b')).run(StrState::new(~"aef"));
 
-    assert_eq!(failure_nomatch.err(), ~"Could not find matching char. found: 'e' required: 'b'");
+    assert_eq!(failure_nomatch.err(), ~"Could not find matching element. Found: 'e' required: 'b'");
 
     let (res, rest) = chr('a').and(success(())).run(StrState::new(~"aef")).unwrap();
 
@@ -313,24 +307,19 @@ mod tests {
   }
 
   #[test]
-  fn test_or(){
+  fn test_or() {
     let (res, rest) = chr('H').or(chr('b')).run(input()).unwrap();
 
-    assert_eq!(res, Left('H'));
+    assert_eq!(res, 'H');
     assert_eq!(rest.content(), ~"ello, 世界");
 
     let failure_nomatch = chr('a').or(chr('b')).run(StrState::new(~"def"));
 
-    assert_eq!(failure_nomatch.err(), ~"Neither of the parsers matched: \nCould not find matching char. found: 'd' required: 'a'\nCould not find matching char. found: 'd' required: 'b'");
-
-    let (res, rest) = chr('a').or(success(())).run(StrState::new(~"def")).unwrap();
-
-    assert_eq!(res, Right(()));
-    assert_eq!(rest.content(), ~"def");
+    assert_eq!(failure_nomatch.err(), ~"Neither of the parsers matched: \nCould not find matching element. Found: 'd' required: 'a'\nCould not find matching element. Found: 'd' required: 'b'");
   }
 
   #[test]
-  fn test_map(){
+  fn test_map() {
     let (txt, rest) = text(~"He").run(input()).map(|t| *t + " MAPPED").unwrap();
 
     assert_eq!(txt, ~"He MAPPED");
@@ -346,19 +335,19 @@ mod tests {
     let p2 = text(~"23").map(toInt);
     let failure_nomatch = p2.run(StrState::new(~"12abc"));
 
-    assert_eq!(failure_nomatch.err(), ~"Could not find matching string. found: ~\"12\" required: ~\"23\"");
+    assert_eq!(failure_nomatch.err(), ~"Could not find matching string. Found: ~\"12\" required: ~\"23\"");
   }
 
   #[test]
-  fn test_flat_map(){
+  fn test_flat_map() {
     let p = text(~"12");
-    fn flatMapFn(txt: ~str) -> Char {
+    fn flatMapFn1(txt: ~str) -> One<char, StrState> {
       match from_str::<int>(txt) {
             Some(..) => chr('a'),
             None => chr('b')
           }
     }
-    let p1 = p.flatMap(flatMapFn);
+    let p1 = p.flatMap(flatMapFn1);
     let (character, rest) = p1.run(StrState::new(~"12abc")).unwrap();
 
     assert_eq!(character, 'a');
@@ -366,9 +355,14 @@ mod tests {
 
     let failure_nomatch = p1.run(StrState::new(~"23abc"));
 
-    assert_eq!(failure_nomatch.err(), ~"Could not find matching string. found: ~\"23\" required: ~\"12\"");
+    assert_eq!(failure_nomatch.err(), ~"Could not find matching string. Found: ~\"23\" required: ~\"12\"");
 
-    fn flatMapFn2(txt: ~str) -> Char { match from_str::<int>(txt) { Some(..) => chr('a'), None => chr('b') } }
+    fn flatMapFn2(txt: ~str) -> One<char, StrState> {
+      match from_str::<int>(txt) {
+        Some(..) => chr('a'),
+        None => chr('b'),
+      }
+    }
     let p2 = text(~"cd").flatMap(flatMapFn2);
     let (character, rest) = p2.run(StrState::new(~"cdba")).unwrap();
 
@@ -377,8 +371,8 @@ mod tests {
   }
 
   #[test]
-  fn test_zero_or_one(){
-    let p1 = chr('a').zeroOrOne();
+  fn test_zero_or_one() {
+    let p1 = chr('a').optional();
     let (character, rest) = p1.run(StrState::new(~"abc")).unwrap();
 
     assert_eq!(character, Some('a'));
@@ -390,8 +384,8 @@ mod tests {
   }
 
   #[test]
-  fn test_zero_or_more(){
-    let p1 = chr('a').zeroOrMore();
+  fn test_zero_or_more() {
+    let p1 = chr('a').many();
     let (character, rest) = p1.run(StrState::new(~"aaabc")).unwrap();
 
     assert_eq!(character, ~['a', 'a', 'a']);
@@ -403,15 +397,15 @@ mod tests {
   }
 
   #[test]
-  fn test_one_or_more(){
-    let p1 = chr('a').oneOrMore();
+  fn test_one_or_more() {
+    let p1 = chr('a').manyOne();
     let (character, rest) = p1.run(StrState::new(~"aabc")).unwrap();
 
     assert_eq!(character, ~['a', 'a']);
     assert_eq!(rest.content(), ~"bc");
     let failure_nomatch = p1.run(rest);
 
-    assert_eq!(failure_nomatch.err(), ~"Could not find matching char. found: 'b' required: 'a'");
+    assert_eq!(failure_nomatch.err(), ~"Could not find matching element. Found: 'b' required: 'a'");
   }
 
   #[test]
@@ -424,7 +418,7 @@ mod tests {
 
     let failure_nomatch = p1.run(rest);
 
-    assert_eq!(failure_nomatch.err(), ~"Could not find matching char. found: 'c' required: 'a'");
+    assert_eq!(failure_nomatch.err(), ~"Could not find matching element. Found: 'c' required: 'a'");
   }
 }
 
